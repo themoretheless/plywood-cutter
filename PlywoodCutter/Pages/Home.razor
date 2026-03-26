@@ -1,0 +1,606 @@
+@page "/"
+@using PlywoodCutter.Helpers
+@inject CuttingOptimizerService Optimizer
+@inject L10n L
+@inject LocalStorageService Store
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+<PageTitle>@L["app.title"]</PageTitle>
+
+<div class="app-container">
+    <header class="app-header">
+        <h1>🪵 @L["app.title"]</h1>
+        <p class="subtitle">@L["home.subtitle"]</p>
+    </header>
+
+    <div class="hotkey-bar">
+        <span><kbd>Enter</kbd> @L["hotkey.add"]</span>
+        <span><kbd>Ctrl</kbd>+<kbd>Enter</kbd> @L["hotkey.calculate"]</span>
+        <span><kbd>Ctrl</kbd>+<kbd>Z</kbd> @L["hotkey.undo"]</span>
+        <span><kbd>Ctrl</kbd>+<kbd>S</kbd> @L["hotkey.export"]</span>
+    </div>
+
+    <div class="main-layout">
+        <aside class="panel panel-input">
+            <section class="card">
+                <h2>📐 @L["sheet_params"]</h2>
+                <div class="form-row">
+                    <label>@L["sheet_preset"]</label>
+                    <select class="form-select" value="@_selectedPreset" @onchange="OnPresetChanged">
+                        <option value="">@L["preset.custom"]</option>
+                        @foreach (var p in SheetPresets)
+                        {
+                            <option value="@p.Key">@L[$"preset.{p.Key}"]</option>
+                        }
+                    </select>
+                </div>
+                <div class="form-row">
+                    <label>@L["width_mm"]</label>
+                    <NumberField Value="SheetWidth" ValueChanged="OnSheetWidthChanged" Min="1" Step="1" />
+                </div>
+                <div class="form-row">
+                    <label>@L["height_mm"]</label>
+                    <NumberField Value="SheetHeight" ValueChanged="OnSheetHeightChanged" Min="1" Step="1" />
+                </div>
+                <div class="form-row">
+                    <label>@L["kerf_mm"]</label>
+                    <NumberField @bind-Value="Kerf" Min="0" Step="1" />
+                </div>
+                <div class="form-row">
+                    <label>@L["strategy"]</label>
+                    <select class="form-select" @bind="SelectedStrategy">
+                        <option value="@CuttingStrategy.Auto">@L["strategy.auto"]</option>
+                        <optgroup label="@L["strategy.best_area"]">
+                            <option value="@CuttingStrategy.BestArea_AreaDesc">@L["strategy.best_area"] · @L["sort.area"]</option>
+                            <option value="@CuttingStrategy.BestArea_MaxSideDesc">@L["strategy.best_area"] · @L["sort.max_side"]</option>
+                            <option value="@CuttingStrategy.BestArea_PerimeterDesc">@L["strategy.best_area"] · @L["sort.perimeter"]</option>
+                        </optgroup>
+                        <optgroup label="@L["strategy.best_short"]">
+                            <option value="@CuttingStrategy.BestShortSide_AreaDesc">@L["strategy.best_short"] · @L["sort.area"]</option>
+                            <option value="@CuttingStrategy.BestShortSide_MaxSideDesc">@L["strategy.best_short"] · @L["sort.max_side"]</option>
+                            <option value="@CuttingStrategy.BestShortSide_PerimeterDesc">@L["strategy.best_short"] · @L["sort.perimeter"]</option>
+                        </optgroup>
+                        <optgroup label="@L["strategy.best_long"]">
+                            <option value="@CuttingStrategy.BestLongSide_AreaDesc">@L["strategy.best_long"] · @L["sort.area"]</option>
+                            <option value="@CuttingStrategy.BestLongSide_MaxSideDesc">@L["strategy.best_long"] · @L["sort.max_side"]</option>
+                            <option value="@CuttingStrategy.BestLongSide_PerimeterDesc">@L["strategy.best_long"] · @L["sort.perimeter"]</option>
+                        </optgroup>
+                    </select>
+                </div>
+            </section>
+
+            <section class="card">
+                <h2>✏️ @L["add_piece"]</h2>
+                <div class="form-row">
+                    <label>@L["name"]</label>
+                    <input type="text" @bind="NewLabel" placeholder="@L["name_placeholder"]" />
+                </div>
+                <div class="form-row">
+                    <label>@L["width_mm"]</label>
+                    <NumberField @bind-Value="NewWidth" Min="1" Step="1" />
+                </div>
+                <div class="form-row">
+                    <label>@L["height_mm"]</label>
+                    <NumberField @bind-Value="NewHeight" Min="1" Step="1" />
+                </div>
+                <div class="form-row">
+                    <label>@L["quantity"]</label>
+                    <NumberField @bind-Value="_newQtyD" Min="1" Step="1" />
+                </div>
+                <div class="form-row form-row-check">
+                    <label>
+                        <input type="checkbox" @bind="NewAllowRotation" />
+                        @L["allow_rotation"]
+                    </label>
+                </div>
+                @if (!string.IsNullOrWhiteSpace(AddError))
+                {
+                    <p class="error">@AddError</p>
+                }
+                <button class="btn btn-primary" @onclick="AddPiece">+ @L["add"]</button>
+            </section>
+        </aside>
+
+        <main class="panel panel-result">
+            @if (Pieces.Any())
+            {
+                <section class="card piece-list-top">
+                    <h2>📋 @L["piece_list"]</h2>
+                    <div class="piece-list piece-list-horizontal @(_isDragging ? "is-dragging" : "")"
+                         @ondragleave="() => _dragOverIdx = -1">
+                        @for (int i = 0; i < Pieces.Count; i++)
+                        {
+                            var piece = Pieces[i];
+                            var idx = i + 1;
+                            var capturedIdx = i;
+                            double qtyProxy = piece.Quantity;
+                            <div @key="piece" class="piece-item piece-item-editing @(_dragOverIdx == capturedIdx ? "drag-over" : "") @(_dragStartIdx == capturedIdx ? "is-dragging-item" : "")"
+                                 draggable="true"
+                                 @ondragstart="() => { _dragStartIdx = capturedIdx; _isDragging = true; }"
+                                 @ondragover:preventDefault="true"
+                                 @ondragover="() => _dragOverIdx = capturedIdx"
+                                 @ondrop="() => DropPiece(capturedIdx)"
+                                 @ondragend="() => { _dragStartIdx = -1; _dragOverIdx = -1; _isDragging = false; }">
+                                <span class="drag-handle" title="@L["drag_hint"]">
+                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                                        <circle cx="9" cy="6" r="2"/><circle cx="15" cy="6" r="2"/>
+                                        <circle cx="9" cy="12" r="2"/><circle cx="15" cy="12" r="2"/>
+                                        <circle cx="9" cy="18" r="2"/><circle cx="15" cy="18" r="2"/>
+                                    </svg>
+                                </span>
+                                <span class="piece-color" style="background:@piece.Color">@idx</span>
+                                <div class="piece-edit-fields">
+                                    <input class="piece-edit-label" type="text" @bind="piece.Label" placeholder="@L["name"]" />
+                                    <div class="piece-edit-dims">
+                                        <NumberField @bind-Value="piece.Width" Min="1" Step="1" />
+                                        <span class="unit">×</span>
+                                        <NumberField @bind-Value="piece.Height" Min="1" Step="1" />
+                                        <span class="unit">мм</span>
+                                        <NumberField Value="qtyProxy" ValueChanged="v => piece.Quantity = Math.Max(1, (int)v)" Min="1" Step="1" />
+                                        <button type="button" class="btn btn-primary btn-sm piece-edit-rot @(piece.AllowRotation ? "rot-on" : "")" title="@L["rotation"]" @onclick="() => piece.AllowRotation = !piece.AllowRotation">↻</button>
+                                    </div>
+                                </div>
+                                <button class="btn btn-danger btn-sm" @onclick="() => RemovePiece(piece)" title="@L["delete"]">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                        <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/>
+                                    </svg>
+                                </button>
+                            </div>
+                        }
+                    </div>
+                    <div class="card-actions card-actions-bottom">
+                        <button class="btn btn-danger" @onclick="ClearAll">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px">
+                                <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/>
+                            </svg>
+                            @L["clear_all"]
+                        </button>
+                        <button class="btn btn-primary" @onclick="Calculate">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px">
+                                <polyline points="9 10 4 15 9 20"/><path d="M20 4v7a4 4 0 0 1-4 4H4"/>
+                            </svg>
+                            @L["calculate"]
+                        </button>
+                    </div>
+                </section>
+            }
+
+            @if (Result is null && !Calculated)
+            {
+                <div class="empty-state">
+                    <div class="empty-icon">🪚</div>
+                    <p>@L["empty_hint"]</p>
+                </div>
+            }
+            else if (Result is not null)
+            {
+                <div class="stats-bar">
+                    <div class="stat">
+                        <span class="stat-value">@Result.TotalSheets</span>
+                        <span class="stat-label">@L["sheets"]</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-value">@Result.OverallEfficiency.ToString("F1")%</span>
+                        <span class="stat-label">@L["efficiency"]</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-value">@((Result.TotalArea - Result.TotalUsedArea).ToString("F0")) мм²</span>
+                        <span class="stat-label">@L["waste"]</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-value stat-value-sm">@StrategyDisplayName(Result.AutoPickedStrategy ?? Result.Strategy)</span>
+                        <span class="stat-label">@L["strategy.used"]</span>
+                    </div>
+                </div>
+
+                @if (Result.UnplacedPieces.Any())
+                {
+                    <div class="alert alert-warn">
+                        <strong>⚠️ @L["unplaced_warn"]</strong>
+                        <ul>
+                            @foreach (var u in Result.UnplacedPieces)
+                            {
+                                <li>@u</li>
+                            }
+                        </ul>
+                    </div>
+                }
+
+                <div class="export-bar">
+                    <button class="btn btn-primary btn-sm" @onclick="ExportAllPdf">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:4px"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"/><path d="M12 17v-6"/><path d="M9.5 14.5 12 17l2.5-2.5"/></svg>
+                        @L["export.all_pdf"]
+                    </button>
+                </div>
+
+                <div class="sheets-grid">
+                    @foreach (var sheet in Result.Sheets)
+                    {
+                        var sheetIdx = sheet.Index;
+                        <div class="sheet-card">
+                            <div class="sheet-header">
+                                <span>@L["sheet"] @(sheet.Index + 1)</span>
+                                <span class="efficiency-badge @EfficiencyClass(sheet.Efficiency)">
+                                    @sheet.Efficiency.ToString("F1")%
+                                </span>
+                            </div>
+                            <div class="sheet-svg-wrap" id="sheet-svg-@sheetIdx">
+                                @RenderSheet(sheet)
+                            </div>
+                            <div class="sheet-footer">
+                                <span>@sheet.PlacedPieces.Count @L["pieces_short"] · @L["waste"] @((sheet.TotalArea - sheet.UsedArea).ToString("F0")) мм²</span>
+                                <button class="btn-dl" @onclick="() => ExportSheetPdf(sheetIdx)">↓ PDF</button>
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+        </main>
+    </div>
+</div>
+
+@code {
+    // ── Sheet presets ─────────────────────────────────────────────────────────
+    static readonly (string Key, double W, double H)[] SheetPresets =
+    [
+        ("2440x1220", 2440, 1220),
+        ("2500x1250", 2500, 1250),
+        ("1525x1525", 1525, 1525),
+        ("2800x2070", 2800, 2070),
+        ("2750x1830", 2750, 1830),
+        ("2440x1830", 2440, 1830),
+        ("3050x1525", 3050, 1525),
+        ("1200x600",  1200, 600),
+    ];
+
+    string _selectedPreset = "2440x1220";
+
+    void OnPresetChanged(ChangeEventArgs e)
+    {
+        _selectedPreset = e.Value?.ToString() ?? "";
+        var preset = SheetPresets.FirstOrDefault(p => p.Key == _selectedPreset);
+        if (preset != default)
+        {
+            SheetWidth = preset.W;
+            SheetHeight = preset.H;
+        }
+    }
+
+    void OnSheetWidthChanged(double v) { SheetWidth = v; _selectedPreset = ""; }
+    void OnSheetHeightChanged(double v) { SheetHeight = v; _selectedPreset = ""; }
+
+    // ── Sheet params ────────────────────────────────────────────────────────
+    double SheetWidth = 2440;
+    double SheetHeight = 1220;
+    double Kerf = 3;
+    CuttingStrategy SelectedStrategy = CuttingStrategy.Auto;
+
+    // ── New piece form ──────────────────────────────────────────────────────
+    string NewLabel = "";
+    double NewWidth = 400;
+    double NewHeight = 300;
+    int NewQty = 1;
+    double _newQtyD { get => NewQty; set => NewQty = Math.Max(1, (int)value); }
+    bool NewAllowRotation = true;
+    string AddError = "";
+
+    List<CutPiece> Pieces = [];
+    CuttingResult? Result;
+    bool Calculated;
+
+    static readonly string[] PieceColors = SvgHelpers.PieceColors;
+    int _colorIdx;
+
+    // ── Lifecycle ────────────────────────────────────────────────────────────
+    DotNetObjectReference<Home>? _dotNetRef;
+
+    protected override void OnInitialized() => L.OnChanged += StateHasChanged;
+
+    public async ValueTask DisposeAsync()
+    {
+        L.OnChanged -= StateHasChanged;
+        await JS.InvokeVoidAsync("keyboardInterop.dispose");
+        _dotNetRef?.Dispose();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+
+        _dotNetRef = DotNetObjectReference.Create(this);
+        await JS.InvokeVoidAsync("keyboardInterop.init", _dotNetRef);
+
+        try
+        {
+            var saved = await Store.GetJsonAsync<HomeState>("home_state");
+            if (saved is not null)
+            {
+                SheetWidth = saved.SheetWidth;
+                SheetHeight = saved.SheetHeight;
+                Kerf = saved.Kerf;
+                Pieces = saved.Pieces ?? [];
+                _colorIdx = Pieces.Count;
+                StateHasChanged();
+            }
+        }
+        catch { /* corrupted localStorage — start fresh */ }
+    }
+
+    [JSInvokable]
+    public async Task OnHotkey(string action)
+    {
+        switch (action)
+        {
+            case "calculate":
+                if (Pieces.Any()) Calculate();
+                break;
+            case "add":
+                await AddPiece();
+                break;
+            case "undo":
+                if (Pieces.Any()) { Pieces.RemoveAt(Pieces.Count - 1); await SaveState(); }
+                break;
+            case "escape":
+                Result = null; Calculated = false;
+                break;
+            case "export_pdf":
+                if (Result is not null) await ExportAllPdf();
+                break;
+        }
+        StateHasChanged();
+    }
+
+    async Task SaveState() => await Store.SetJsonAsync("home_state", new HomeState
+    {
+        SheetWidth = SheetWidth,
+        SheetHeight = SheetHeight,
+        Kerf = Kerf,
+        Pieces = Pieces
+    });
+
+    record HomeState
+    {
+        public double SheetWidth { get; init; }
+        public double SheetHeight { get; init; }
+        public double Kerf { get; init; }
+        public List<CutPiece>? Pieces { get; init; }
+    }
+
+    // ── Actions ──────────────────────────────────────────────────────────────
+    async Task AddPiece()
+    {
+        AddError = "";
+        if (NewWidth <= 0 || NewHeight <= 0) { AddError = L["invalid_dims"]; return; }
+        if (NewWidth > SheetWidth && NewHeight > SheetWidth && NewWidth > SheetHeight && NewHeight > SheetHeight) { AddError = L["piece_larger"]; return; }
+        if (NewQty <= 0) { AddError = L["qty_min"]; return; }
+
+        Pieces.Add(new CutPiece
+        {
+            Label = NewLabel,
+            Width = NewWidth,
+            Height = NewHeight,
+            Quantity = NewQty,
+            AllowRotation = NewAllowRotation,
+            Color = PieceColors[_colorIdx++ % PieceColors.Length]
+        });
+
+        NewLabel = "";
+        NewWidth = 400;
+        NewHeight = 300;
+        NewQty = 1;
+        await SaveState();
+    }
+
+    int _dragStartIdx = -1;
+    int _dragOverIdx = -1;
+    bool _isDragging = false;
+
+    async Task DropPiece(int targetIdx)
+    {
+        if (_dragStartIdx < 0 || _dragStartIdx == targetIdx || _dragStartIdx >= Pieces.Count) return;
+        var item = Pieces[_dragStartIdx];
+        Pieces.RemoveAt(_dragStartIdx);
+        Pieces.Insert(Math.Min(targetIdx, Pieces.Count), item);
+        _dragStartIdx = -1;
+        _dragOverIdx = -1;
+        await SaveState();
+    }
+
+    async Task RemovePiece(CutPiece p) { Pieces.Remove(p); await SaveState(); }
+
+    async Task ClearAll()
+    {
+        Pieces.Clear();
+        Result = null;
+        Calculated = false;
+        _colorIdx = 0;
+        await SaveState();
+    }
+
+    void Calculate()
+    {
+        Calculated = true;
+        Result = Optimizer.Optimize(SheetWidth, SheetHeight, Pieces, Kerf, SelectedStrategy);
+    }
+
+    async Task ExportSheetPdf(int sheetIdx) =>
+        await JS.InvokeVoidAsync("downloadInterop.savePdfFromSelector",
+            $"sheet_{sheetIdx + 1}.pdf", $"#sheet-svg-{sheetIdx} svg", SheetWidth, SheetHeight);
+
+    async Task ExportAllPdf() =>
+        await JS.InvokeVoidAsync("downloadInterop.savePdfAllSheets",
+            "cutting_layout.pdf", ".sheet-svg-wrap svg", SheetWidth, SheetHeight);
+
+    // ── SVG rendering ───────────────────────────────────────────────────────
+    const double SvgMaxW = 520;
+    const double SvgMaxH = 420;
+
+    RenderFragment RenderSheet(Sheet sheet)
+    {
+        double scale = Math.Min(SvgMaxW / sheet.Width, SvgMaxH / sheet.Height);
+        double svgW = sheet.Width * scale;
+        double svgH = sheet.Height * scale;
+
+        return builder =>
+        {
+            builder.OpenElement(0, "svg");
+            builder.AddAttribute(1, "width", svgW.ToString("F0"));
+            builder.AddAttribute(2, "height", svgH.ToString("F0"));
+            builder.AddAttribute(3, "viewBox", $"0 0 {svgW:F0} {svgH:F0}");
+            builder.AddAttribute(4, "style", "display:block;margin:auto;");
+
+            // Sheet background
+            builder.OpenElement(10, "rect");
+            builder.AddAttribute(11, "width", svgW.ToString("F0"));
+            builder.AddAttribute(12, "height", svgH.ToString("F0"));
+            builder.AddAttribute(13, "fill", "#f5f0e8");
+            builder.AddAttribute(14, "stroke", "#8B7355");
+            builder.AddAttribute(15, "stroke-width", "2");
+            builder.CloseElement();
+
+            // Wood grain lines (decorative)
+            for (int g = 1; g < 10; g++)
+            {
+                double gy = svgH * g / 10;
+                builder.OpenElement(20 + g * 10, "line");
+                builder.AddAttribute(21 + g * 10, "x1", "0");
+                builder.AddAttribute(22 + g * 10, "y1", gy.ToString("F1"));
+                builder.AddAttribute(23 + g * 10, "x2", svgW.ToString("F0"));
+                builder.AddAttribute(24 + g * 10, "y2", gy.ToString("F1"));
+                builder.AddAttribute(25 + g * 10, "stroke", "#d4c9a8");
+                builder.AddAttribute(26 + g * 10, "stroke-width", "0.5");
+                builder.CloseElement();
+            }
+
+            int seq = 200;
+            foreach (var pp in sheet.PlacedPieces)
+            {
+                double x = pp.X * scale;
+                double y = pp.Y * scale;
+                double w = pp.Width * scale;
+                double h = pp.Height * scale;
+                string color = pp.Source.Color;
+                string label = pp.Source.Label?.Trim() ?? "";
+                string dims = $"{pp.Width:F0}×{pp.Height:F0}";
+                int pieceIdx = Pieces.IndexOf(pp.Source) + 1;
+
+                builder.OpenElement(seq++, "rect");
+                builder.AddAttribute(seq++, "x", x.ToString("F1"));
+                builder.AddAttribute(seq++, "y", y.ToString("F1"));
+                builder.AddAttribute(seq++, "width", w.ToString("F1"));
+                builder.AddAttribute(seq++, "height", h.ToString("F1"));
+                builder.AddAttribute(seq++, "fill", color);
+                builder.AddAttribute(seq++, "fill-opacity", "0.82");
+                builder.AddAttribute(seq++, "stroke", "#fff");
+                builder.AddAttribute(seq++, "stroke-width", "0.1");
+                builder.CloseElement();
+
+                double badgeW = pieceIdx >= 10 ? 16 : 12;
+                double badgeH = 13;
+                builder.OpenElement(seq++, "rect");
+                builder.AddAttribute(seq++, "x", (x + 3).ToString("F1"));
+                builder.AddAttribute(seq++, "y", (y + 3).ToString("F1"));
+                builder.AddAttribute(seq++, "width", badgeW.ToString("F0"));
+                builder.AddAttribute(seq++, "height", badgeH.ToString("F0"));
+                builder.AddAttribute(seq++, "rx", "3");
+                builder.AddAttribute(seq++, "fill", "rgba(0,0,0,0.35)");
+                builder.CloseElement();
+
+                builder.OpenElement(seq++, "text");
+                builder.AddAttribute(seq++, "x", (x + 3 + badgeW / 2).ToString("F1"));
+                builder.AddAttribute(seq++, "y", (y + 3 + badgeH / 2).ToString("F1"));
+                builder.AddAttribute(seq++, "text-anchor", "middle");
+                builder.AddAttribute(seq++, "dominant-baseline", "middle");
+                builder.AddAttribute(seq++, "font-size", "8");
+                builder.AddAttribute(seq++, "font-weight", "700");
+                builder.AddAttribute(seq++, "fill", "#fff");
+                builder.AddContent(seq++, pieceIdx.ToString());
+                builder.CloseElement();
+
+                if (pp.IsRotated)
+                {
+                    builder.OpenElement(seq++, "text");
+                    builder.AddAttribute(seq++, "x", (x + w - 6).ToString("F1"));
+                    builder.AddAttribute(seq++, "y", (y + 12).ToString("F1"));
+                    builder.AddAttribute(seq++, "font-size", "10");
+                    builder.AddAttribute(seq++, "fill", "#fff");
+                    builder.AddAttribute(seq++, "opacity", "0.9");
+                    builder.AddContent(seq++, "↻");
+                    builder.CloseElement();
+                }
+
+                if (w > 40 && h > 22)
+                {
+                    bool hasLabel = !string.IsNullOrEmpty(label);
+                    double dimsY = hasLabel ? y + h / 2 + 9 : y + h / 2;
+
+                    if (hasLabel)
+                    {
+                        builder.OpenElement(seq++, "text");
+                        builder.AddAttribute(seq++, "x", (x + w / 2).ToString("F1"));
+                        builder.AddAttribute(seq++, "y", (y + h / 2 - 5).ToString("F1"));
+                        builder.AddAttribute(seq++, "text-anchor", "middle");
+                        builder.AddAttribute(seq++, "dominant-baseline", "middle");
+                        builder.AddAttribute(seq++, "font-size", Math.Min(13, w / 6).ToString("F0"));
+                        builder.AddAttribute(seq++, "font-weight", "600");
+                        builder.AddAttribute(seq++, "fill", "#fff");
+                        builder.AddAttribute(seq++, "style", "text-shadow:0 1px 2px rgba(0,0,0,.5)");
+                        builder.AddContent(seq++, Truncate(label, (int)(w / 7)));
+                        builder.CloseElement();
+                    }
+
+                    builder.OpenElement(seq++, "text");
+                    builder.AddAttribute(seq++, "x", (x + w / 2).ToString("F1"));
+                    builder.AddAttribute(seq++, "y", dimsY.ToString("F1"));
+                    builder.AddAttribute(seq++, "text-anchor", "middle");
+                    builder.AddAttribute(seq++, "dominant-baseline", "middle");
+                    builder.AddAttribute(seq++, "font-size", Math.Min(11, w / 7).ToString("F0"));
+                    builder.AddAttribute(seq++, "fill", "#fff");
+                    builder.AddAttribute(seq++, "opacity", "0.85");
+                    builder.AddContent(seq++, dims);
+                    builder.CloseElement();
+                }
+            }
+
+            builder.OpenElement(seq++, "text");
+            builder.AddAttribute(seq++, "x", (svgW / 2).ToString("F0"));
+            builder.AddAttribute(seq++, "y", (svgH - 4).ToString("F0"));
+            builder.AddAttribute(seq++, "text-anchor", "middle");
+            builder.AddAttribute(seq++, "font-size", "11");
+            builder.AddAttribute(seq++, "fill", "#8B7355");
+            builder.AddContent(seq++, $"{sheet.Width:F0} мм");
+            builder.CloseElement();
+
+            builder.OpenElement(seq++, "text");
+            builder.AddAttribute(seq++, "x", "4");
+            builder.AddAttribute(seq++, "y", (svgH / 2).ToString("F0"));
+            builder.AddAttribute(seq++, "text-anchor", "middle");
+            builder.AddAttribute(seq++, "dominant-baseline", "middle");
+            builder.AddAttribute(seq++, "font-size", "11");
+            builder.AddAttribute(seq++, "fill", "#8B7355");
+            builder.AddAttribute(seq++, "transform", $"rotate(-90,4,{svgH / 2:F0})");
+            builder.AddContent(seq++, $"{sheet.Height:F0} мм");
+            builder.CloseElement();
+
+            builder.CloseElement();
+        };
+    }
+
+    static string Truncate(string s, int maxChars) => SvgHelpers.Truncate(s, maxChars);
+    static string EfficiencyClass(double e) => SvgHelpers.EfficiencyClass(e);
+
+    string StrategyDisplayName(CuttingStrategy s) => s switch
+    {
+        CuttingStrategy.BestArea_AreaDesc => $"{L["strategy.best_area"]} · {L["sort.area"]}",
+        CuttingStrategy.BestArea_MaxSideDesc => $"{L["strategy.best_area"]} · {L["sort.max_side"]}",
+        CuttingStrategy.BestArea_PerimeterDesc => $"{L["strategy.best_area"]} · {L["sort.perimeter"]}",
+        CuttingStrategy.BestShortSide_AreaDesc => $"{L["strategy.best_short"]} · {L["sort.area"]}",
+        CuttingStrategy.BestShortSide_MaxSideDesc => $"{L["strategy.best_short"]} · {L["sort.max_side"]}",
+        CuttingStrategy.BestShortSide_PerimeterDesc => $"{L["strategy.best_short"]} · {L["sort.perimeter"]}",
+        CuttingStrategy.BestLongSide_AreaDesc => $"{L["strategy.best_long"]} · {L["sort.area"]}",
+        CuttingStrategy.BestLongSide_MaxSideDesc => $"{L["strategy.best_long"]} · {L["sort.max_side"]}",
+        CuttingStrategy.BestLongSide_PerimeterDesc => $"{L["strategy.best_long"]} · {L["sort.perimeter"]}",
+        _ => L["strategy.auto"],
+    };
+}

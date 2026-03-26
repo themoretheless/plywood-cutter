@@ -1,0 +1,745 @@
+@page "/box"
+@using System.Text
+@using Microsoft.AspNetCore.Components.Rendering
+@inject IJSRuntime JS
+@inject L10n L
+@implements IAsyncDisposable
+
+<PageTitle>@L["box.title"]</PageTitle>
+
+<div class="app-container">
+    <header class="app-header">
+        <h1>📦 @L["box.title"]</h1>
+        <p class="subtitle">@L["box.subtitle"]</p>
+    </header>
+
+    <div class="main-layout">
+        <aside class="panel panel-input">
+            <section class="card">
+                <h2>📐 @L["sheet_params"]</h2>
+                <div class="form-row"><label>@L["box.outer_width"]</label><NumberField @bind-Value="W"   Min="50"  Step="10" /></div>
+                <div class="form-row"><label>@L["box.height"]</label>          <NumberField @bind-Value="H"   Min="50"  Step="10" /></div>
+                <div class="form-row"><label>@L["box.depth"]</label>         <NumberField @bind-Value="D"   Min="50"  Step="10" /></div>
+            </section>
+            <section class="card">
+                <h2>⚙️ @L["box.material"]</h2>
+                <div class="form-row"><label>@L["box.thickness"]</label>     <NumberField @bind-Value="T"    Min="1"  Step="0.5"  /></div>
+                <div class="form-row"><label>@L["box.kerf"]</label> <NumberField @bind-Value="Kerf" Min="0"  Step="0.05" /></div>
+                <div class="form-row"><label>@L["box.tab_size"]</label> <NumberField @bind-Value="TabH"  Min="10" Step="5"   /></div>
+                <div class="form-row"><label>@L["box.tabs_per_edge"]</label>    <NumberField @bind-Value="_nTab"     Min="1" Step="1" /></div>
+                <div class="form-row"><label>@L["box.shelves"]</label>    <NumberField @bind-Value="_nShelves" Min="0" Step="1" /></div>
+            </section>
+            <section class="card shelf-summary">
+                <h2>📋 @L["box.parts"]</h2>
+                <div class="shelf-part-row"><span>@L["box.sides"]</span> <span>2 × @D.ToString("F0")×@H.ToString("F0") мм</span></div>
+                <div class="shelf-part-row"><span>@L["box.top_bottom"]</span> <span>2 × @W.ToString("F0")×@D.ToString("F0") мм</span></div>
+                <div class="shelf-part-row"><span>@L["box.back"]</span>  <span>1 × @W.ToString("F0")×@H.ToString("F0") мм</span></div>
+                @if (NShelves > 0)
+                {
+                    <div class="shelf-part-row"><span>@L["box.shelf"]</span> <span>@NShelves × @W.ToString("F0")×@D.ToString("F0") мм</span></div>
+                }
+                <div class="shelf-part-row shelf-total"><span>@L["box.total"]</span><span>@(5 + NShelves) @L["box.pcs"]</span></div>
+            </section>
+            <section class="card">
+                <h2>✂️ @L["box.sheet_title"]</h2>
+                <div class="form-row"><label>@L["box.sheet_width"]</label><NumberField @bind-Value="SheetW" Min="300" Step="10"/></div>
+                <div class="form-row"><label>@L["box.sheet_height"]</label><NumberField @bind-Value="SheetH" Min="300" Step="10"/></div>
+                <div class="form-row"><label>@L["box.gap"]</label>       <NumberField @bind-Value="CutGap" Min="1"   Step="1" /></div>
+            </section>
+            <section class="card">
+                <h2>ℹ️ @L["box.assembly"]</h2>
+                <p style="font-size:0.82rem;color:var(--muted);line-height:1.5">
+                    @L["box.inner"]
+                    <strong>@(Wi.ToString("F0"))×@(Hi.ToString("F0"))×@((D-T).ToString("F0")) мм</strong>
+                </p>
+            </section>
+        </aside>
+
+        <main class="panel panel-result">
+            <section class="card">
+                <div class="card-head">
+                    <h2>⬛ @L["box.side_wall"] <small>(2 @L["box.pcs"])</small></h2>
+                    <button class="btn-dl" @onclick="@(async () => await DlPiece("боковая.svg", PathSide(), D, H))">↓ SVG</button>
+                </div>
+                <div class="sheet-svg-wrap">@RenderSide()</div>
+                <div class="sheet-footer">@D.ToString("F0") × @H.ToString("F0") мм · пазы @TabH.ToString("F0")×@TF.ToString("F1") мм на 3 краях</div>
+            </section>
+            <section class="card">
+                <div class="card-head">
+                    <h2>🔝 @L["box.top_bottom_wall"] <small>(2 @L["box.pcs"])</small></h2>
+                    <button class="btn-dl" @onclick="@(async () => await DlPiece("верх-низ.svg", PathTopBottom(), W, D))">↓ SVG</button>
+                </div>
+                <div class="sheet-svg-wrap">@RenderTopBottom()</div>
+                <div class="sheet-footer">@W.ToString("F0") × @D.ToString("F0") мм · шипы @T.ToString("F0")×@TabH.ToString("F0") мм слева/справа · паз сзади</div>
+            </section>
+            <section class="card">
+                <div class="card-head">
+                    <h2>🟪 @L["box.back_wall"] <small>(1 @L["box.pcs"])</small></h2>
+                    <button class="btn-dl" @onclick="@(async () => await DlPiece("задняя.svg", PathBack(), W, H))">↓ SVG</button>
+                </div>
+                <div class="sheet-svg-wrap">@RenderBack()</div>
+                <div class="sheet-footer">@W.ToString("F0") × @H.ToString("F0") мм · шипы @T.ToString("F0")×@TabH.ToString("F0") мм по всему периметру</div>
+            </section>
+            @if (NShelves > 0)
+            {
+                <section class="card">
+                    <div class="card-head">
+                        <h2>📏 Полка <small>(@NShelves шт)</small></h2>
+                        <button class="btn-dl" @onclick="@(async () => await DlPiece("полка.svg", PathShelf(), W, D))">↓ SVG</button>
+                    </div>
+                    <div class="sheet-svg-wrap">@RenderShelf()</div>
+                    <div class="sheet-footer">@W.ToString("F0") × @D.ToString("F0") мм · шипы бок @T.ToString("F0")×@TabH.ToString("F0") мм · зад @NTab×@TabH.ToString("F0") мм</div>
+                </section>
+            }
+            <section class="card">
+                <h2>📦 @L["box.assembly_3d"]</h2>
+                <div class="iso-controls">
+                    <label>@L["box.explode"]</label>
+                    <input type="range" min="0" max="0.5" step="0.01"
+                           value="@_isoExplode"
+                           @oninput="OnExplodeChanged"
+                           style="flex:1" />
+                    <span class="iso-hint">@L["box.mouse_hint"]</span>
+                </div>
+                <div id="box3d-container" style="width:100%;height:450px;border-radius:8px;overflow:hidden;"></div>
+            </section>
+            <section class="card">
+                <h2>✂️ @L["box.cutting_layout"]</h2>
+                @RenderCuttingLayout()
+            </section>
+        </main>
+    </div>
+</div>
+
+@code {
+    double W = 300, H = 400, D = 200;
+    double T    = 6;
+    double Kerf = 0.1;
+    double TabH = 30;
+
+    int    NTab     = 1;
+    int    NShelves = 0;
+    double _nTab     { get => NTab;     set => NTab     = Math.Max(1, (int)value); }
+    double _nShelves { get => NShelves; set => NShelves = Math.Max(0, (int)value); }
+
+    double TF => T + Kerf;
+    double Wi => W - 2 * T;
+    double Hi => H - 2 * T;
+
+    protected override void OnInitialized() => L.OnChanged += StateHasChanged;
+
+    public async ValueTask DisposeAsync()
+    {
+        L.OnChanged -= StateHasChanged;
+        if (_3dReady)
+            await JS.InvokeVoidAsync("box3d.dispose");
+    }
+
+    // ── 3D-вид (Three.js) ───────────────────────────────────────────────────
+    double _isoExplode = 0.22;
+    bool _3dReady;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            for (var i = 0; i < 40; i++)
+            {
+                if (await JS.InvokeAsync<bool>("box3dReady")) break;
+                await Task.Delay(100);
+            }
+            await JS.InvokeVoidAsync("box3d.init", "box3d-container");
+            _3dReady = true;
+        }
+        if (_3dReady) await UpdateScene();
+    }
+
+    async Task OnExplodeChanged(ChangeEventArgs e)
+    {
+        if (double.TryParse(e.Value?.ToString(), System.Globalization.CultureInfo.InvariantCulture, out var v))
+            _isoExplode = v;
+        await UpdateScene();
+    }
+
+    async Task UpdateScene()
+    {
+        if (!_3dReady) return;
+        double explode = Math.Max(_isoExplode, 0.001);
+        double ex = W * explode, ey = D * explode, ez = H * explode;
+
+        var panels = new List<object>();
+
+        double[][] Cv(List<(double x, double y, double z)> pts) =>
+            pts.Select(p => new[] { p.x, p.y, p.z }).ToArray();
+
+        double[][][] Hv(List<List<(double x, double y, double z)>> holes) =>
+            holes.Select(h => h.Select(p => new[] { p.x, p.y, p.z }).ToArray()).ToArray();
+
+        // Боковые
+        var lh = SideHoles3D(-ex); var rh = SideHoles3D(W + ex);
+        panels.Add(new { c = Cv(SidePts3D(-ex)),   n = new[]{1.0,0,0},  t = T, col = "#2980b9", ec = "#1a5276", h = lh.Count > 0 ? (object)Hv(lh) : null });
+        panels.Add(new { c = Cv(SidePts3D(W + ex)), n = new[]{-1.0,0,0}, t = T, col = "#2980b9", ec = "#1a5276", h = rh.Count > 0 ? (object)Hv(rh) : null });
+        // Верх/низ
+        panels.Add(new { c = Cv(HorizPts3D(H + ez)), n = new[]{0,0,-1.0}, t = T, col = "#27ae60", ec = "#1e8449", h = (object?)null });
+        panels.Add(new { c = Cv(HorizPts3D(-ez)),     n = new[]{0,0,1.0},  t = T, col = "#27ae60", ec = "#1e8449", h = (object?)null });
+        // Задняя
+        panels.Add(new { c = Cv(BackPts3D(D + ey)), n = new[]{0,-1.0,0}, t = T, col = "#8e44ad", ec = "#5b2c6f", h = (object?)null });
+        // Полки
+        foreach (var sz in ShelfSlotYs())
+            panels.Add(new { c = Cv(ShelfPts3D(sz)), n = new[]{0,0,1.0}, t = T, col = "#e67e22", ec = "#ca6f1e", h = (object?)null });
+
+        // ── Направляющие (пунктир от взорванной панели к собранному положению)
+        var guides = new List<double[]>();
+        void G(double x1,double y1,double z1, double x2,double y2,double z2)
+            => guides.Add(new[]{x1,y1,z1,x2,y2,z2});
+        // Верх/низ → собранная позиция
+        foreach (var (gx,gy) in new[]{(0.0,0.0),(W,0.0),(W,D),(0.0,D)})
+            { G(gx,gy,-ez,gx,gy,0); G(gx,gy,H+ez,gx,gy,H); }
+        // Боковые → собранная позиция
+        foreach (var (gy,gz) in new[]{(0.0,0.0),(D,0.0),(D,H),(0.0,H)})
+            { G(-ex,gy,gz,0,gy,gz); G(W+ex,gy,gz,W,gy,gz); }
+        // Задняя → собранная позиция
+        foreach (var (gx,gz) in new[]{(0.0,0.0),(W,0.0),(W,H),(0.0,H)})
+            G(gx,D+ey,gz,gx,D,gz);
+
+        // ── Подписи
+        var labels = new List<object>();
+        string Sz(double w, double h) => $"{w:F0}×{h:F0}";
+        labels.Add(new { text = L["box.top_short"],    sub = Sz(W,D), x = W/2.0, y = D/2.0, z = H+ez,   color = "#a0e0a0" });
+        labels.Add(new { text = L["box.bottom_short"], sub = Sz(W,D), x = W/2.0, y = D/2.0, z = -ez,     color = "#a0e0a0" });
+        labels.Add(new { text = L["box.side_short"],   sub = Sz(D,H), x = -ex,    y = D/2.0, z = H/2.0,   color = "#80c0e0" });
+        labels.Add(new { text = L["box.side_short"],   sub = Sz(D,H), x = W+ex,   y = D/2.0, z = H/2.0,   color = "#80c0e0" });
+        labels.Add(new { text = L["box.back_short"],   sub = Sz(W,H), x = W/2.0, y = D+ey,  z = H/2.0,   color = "#c0a0d0" });
+        var shYs = ShelfSlotYs();
+        for (var i = 0; i < shYs.Length; i++)
+            labels.Add(new { text = $"{L["box.shelf_short"]}{i+1}", sub = Sz(W,D), x = W/2.0, y = D/2.0, z = shYs[i], color = "#e0c080" });
+
+        var data = new { panels, guides, labels };
+        string json = System.Text.Json.JsonSerializer.Serialize(data);
+        await JS.InvokeVoidAsync("box3d.update", json, W / 2.0, D / 2.0, H / 2.0);
+    }
+
+    // ── Раскрой ───────────────────────────────────────────────────────────────
+    double SheetW = 1220, SheetH = 2440, CutGap = 5;
+
+    record PieceInfo(double W, double H, string Label, string Color);
+    record LayoutPiece(double X, double Y, double W, double H, string Label, string Color);
+
+    PieceInfo[] AllPieces()
+    {
+        var side = L["box.side_short"];
+        var list = new List<PieceInfo>
+        {
+            new(D, H, $"{side}1", "var(--accent)"),
+            new(D, H, $"{side}2", "var(--accent)"),
+            new(W, D, L["box.top_short"],    "#27ae60"),
+            new(W, D, L["box.bottom_short"], "#27ae60"),
+            new(W, H, L["box.back_short"],   "#8e44ad"),
+        };
+        for (var i = 1; i <= NShelves; i++) list.Add(new(W, D, $"{L["box.shelf_short"]}{i}", "#e67e22"));
+        list.Sort((a, b) => (b.W * b.H).CompareTo(a.W * a.H));
+        return list.ToArray();
+    }
+
+    // Алгоритм «полка»: First Fit Decreasing, с вращением деталей
+    List<List<LayoutPiece>> ComputeLayout()
+    {
+        var todo = AllPieces().ToList();
+        var result = new List<List<LayoutPiece>>();
+        double g = CutGap;
+
+        while (todo.Count > 0)
+        {
+            var sheetPieces = new List<LayoutPiece>();
+            // Полки: (Y верхнего края, максимальная высота, следующий X)
+            var shelves = new List<(double Y, double H, double NX)> { (g, 0, g) };
+            var remaining = new List<PieceInfo>();
+
+            foreach (var p in todo)
+            {
+                bool placed = false;
+                // Пробуем исходную ориентацию, затем повёрнутую
+                var orientations = Math.Abs(p.W - p.H) < 0.01
+                    ? new[] { (p.W, p.H) }
+                    : new[] { (p.W, p.H), (p.H, p.W) };
+
+                foreach (var (fw, fh) in orientations)
+                {
+                    if (placed) break;
+                    if (fw > SheetW - 2 * g || fh > SheetH - 2 * g) continue;
+
+                    // Ищем первую подходящую полку
+                    for (int si = 0; si < shelves.Count && !placed; si++)
+                    {
+                        var (sy, sh, nx) = shelves[si];
+                        if (nx + fw + g <= SheetW && sy + fh + g <= SheetH)
+                        {
+                            sheetPieces.Add(new(nx, sy, fw, fh, p.Label, p.Color));
+                            shelves[si] = (sy, Math.Max(sh, fh), nx + fw + g);
+                            placed = true;
+                        }
+                    }
+
+                    if (!placed)
+                    {
+                        // Добавляем новую полку под последней
+                        var last = shelves[shelves.Count - 1];
+                        if (last.H == 0) continue;
+                        double newY = last.Y + last.H + g;
+                        if (newY + fh + g <= SheetH && g + fw + g <= SheetW)
+                        {
+                            shelves.Add((newY, fh, g + fw + g));
+                            sheetPieces.Add(new(g, newY, fw, fh, p.Label, p.Color));
+                            placed = true;
+                        }
+                    }
+                }
+
+                if (!placed) remaining.Add(p);
+            }
+
+            if (sheetPieces.Count == 0) break; // деталь больше листа — прерываем
+            result.Add(sheetPieces);
+            todo = remaining;
+        }
+
+        return result;
+    }
+
+    RenderFragment RenderCuttingLayout()
+    {
+        var all    = AllPieces();
+        var sheets = ComputeLayout();
+
+        double totalPieceArea = all.Sum(p => p.W * p.H);
+        double totalSheetArea = sheets.Count * SheetW * SheetH;
+        double util = totalSheetArea > 0 ? totalPieceArea / totalSheetArea * 100 : 0;
+        double scale = Math.Min(480.0 / SheetW, 480.0 / SheetH);
+
+        // Детали, которые не влезли ни в один лист
+        int placedCount = sheets.Sum(s => s.Count);
+        int totalCount  = all.Length;
+        var tooBig = all.Where(p =>
+            (p.W > SheetW - 2 * CutGap || p.H > SheetH - 2 * CutGap) &&
+            (p.H > SheetW - 2 * CutGap || p.W > SheetH - 2 * CutGap)).ToList();
+
+        return builder =>
+        {
+            int s = 0;
+
+            // Предупреждение о деталях больше листа
+            if (tooBig.Count > 0)
+            {
+                builder.OpenElement(s++, "div");
+                builder.AddAttribute(s++, "class", "cut-warning");
+                builder.AddContent(s++,
+                    $"⚠ {L["box.too_big"]} ({SheetW:F0}×{SheetH:F0} мм): " +
+                    string.Join(", ", tooBig.Select(p => $"{p.Label} ({p.W:F0}×{p.H:F0})")));
+                builder.CloseElement();
+            }
+
+            // Строка статистики
+            builder.OpenElement(s++, "div");
+            builder.AddAttribute(s++, "class", "cut-stats");
+            builder.AddContent(s++,
+                string.Format(L["box.stats"], sheets.Count, $"{totalPieceArea / 1e6:F4}", $"{totalSheetArea / 1e6:F4}", $"{util:F1}"));
+            builder.CloseElement();
+
+            builder.OpenElement(s++, "div");
+            builder.AddAttribute(s++, "class", "cut-sheets-wrap");
+
+            foreach (var (sheetPieces, sheetIdx) in sheets.Select((sp, i) => (sp, i)))
+            {
+                double svgW = SheetW * scale;
+                double svgH = SheetH * scale;
+
+                builder.OpenElement(s++, "div");
+                builder.AddAttribute(s++, "class", "cut-sheet");
+
+                builder.OpenElement(s++, "div");
+                builder.AddAttribute(s++, "class", "cut-sheet-title");
+                builder.AddContent(s++, $"{L["box.sheet_label"]} {sheetIdx + 1}  —  {SheetW:F0}×{SheetH:F0} мм");
+                int capturedIdx = sheetIdx;
+                builder.OpenElement(s++, "button");
+                builder.AddAttribute(s++, "class", "btn-dl btn-dl-sheet");
+                builder.AddAttribute(s++, "onclick", EventCallback.Factory.Create(this, async () => await DlSheet(capturedIdx)));
+                builder.AddContent(s++, "↓ SVG");
+                builder.CloseElement();
+                builder.CloseElement();
+
+                // viewBox в мм — SVG сам масштабирует под width/height
+                double sw       = 0.8 / scale;   // толщина линии ~0.8px на экране
+                double fontSize = 9.0 / scale;    // ~9px шрифт на экране
+
+                builder.OpenElement(s++, "svg");
+                builder.AddAttribute(s++, "width",   svgW.ToString("F0"));
+                builder.AddAttribute(s++, "height",  svgH.ToString("F0"));
+                builder.AddAttribute(s++, "viewBox", $"0 0 {SheetW:F1} {SheetH:F1}");
+                builder.AddAttribute(s++, "style",   "display:block;");
+
+                // Фон листа
+                builder.OpenElement(s++, "rect");
+                builder.AddAttribute(s++, "x", "0"); builder.AddAttribute(s++, "y", "0");
+                builder.AddAttribute(s++, "width",  SheetW.ToString("F1"));
+                builder.AddAttribute(s++, "height", SheetH.ToString("F1"));
+                builder.AddAttribute(s++, "fill",   "var(--laser-sheet-bg)");
+                builder.AddAttribute(s++, "stroke", "var(--laser-sheet-border)");
+                builder.AddAttribute(s++, "stroke-width", (1.0 / scale).ToString("F2"));
+                builder.CloseElement();
+
+                foreach (var p in sheetPieces)
+                {
+                    var (ow, oh, pathData) = PieceData(p.Label);
+                    bool rotated = Math.Abs(p.W - oh) < 1 && Math.Abs(p.H - ow) < 1;
+                    string tf = rotated
+                        ? $"translate({p.X:F2},{p.Y + ow:F2}) rotate(90)"
+                        : $"translate({p.X:F2},{p.Y:F2})";
+
+                    // Деталь — реальный контур
+                    builder.OpenElement(s++, "g");
+                    builder.AddAttribute(s++, "transform", tf);
+                    builder.OpenElement(s++, "path");
+                    builder.AddAttribute(s++, "d",            pathData);
+                    builder.AddAttribute(s++, "fill",         p.Color);
+                    builder.AddAttribute(s++, "fill-opacity", "0.28");
+                    builder.AddAttribute(s++, "fill-rule",    "evenodd");
+                    builder.AddAttribute(s++, "stroke",       "var(--laser-cut)");
+                    builder.AddAttribute(s++, "stroke-width", sw.ToString("F2"));
+                    builder.AddAttribute(s++, "stroke-linejoin", "miter");
+                    builder.CloseElement(); // path
+                    builder.CloseElement(); // g
+
+                    // Подпись — в координатах листа (абсолютно)
+                    double cx = p.X + p.W / 2, cy = p.Y + p.H / 2;
+                    builder.OpenElement(s++, "text");
+                    builder.AddAttribute(s++, "x", cx.ToString("F1"));
+                    builder.AddAttribute(s++, "y", cy.ToString("F1"));
+                    builder.AddAttribute(s++, "text-anchor",       "middle");
+                    builder.AddAttribute(s++, "dominant-baseline", "middle");
+                    builder.AddAttribute(s++, "font-size",         fontSize.ToString("F1"));
+                    builder.AddAttribute(s++, "fill",              "var(--muted)");
+                    builder.AddContent(s++, $"{p.Label} {p.W:F0}×{p.H:F0}");
+                    builder.CloseElement(); // text
+                }
+
+                builder.CloseElement(); // svg
+                builder.CloseElement(); // div.cut-sheet
+            }
+
+            builder.CloseElement(); // div.cut-sheets-wrap
+        };
+    }
+
+    // ── Генераторы 3D-контуров для Three.js ─────────────────────────────────
+
+    List<(double x, double y, double z)> HorizPts3D(double z0)
+    {
+        var p = new List<(double x, double y, double z)>();
+        void A(double x, double y) => p.Add((x, y, z0));
+        A(T, 0); A(W - T, 0);
+        foreach (var ty in TabPositions(D))
+            { A(W-T,ty); A(W,ty); A(W,ty+TabH); A(W-T,ty+TabH); }
+        A(W-T, D);
+        foreach (var tx in TabPositions(Wi).Reverse())
+            { double rx=T+tx; A(rx+TabH,D); A(rx+TabH,D-TF); A(rx,D-TF); A(rx,D); }
+        A(T, D);
+        foreach (var ty in TabPositions(D).Reverse())
+            { A(T,ty+TabH); A(0,ty+TabH); A(0,ty); A(T,ty); }
+        return p;
+    }
+
+    List<(double x, double y, double z)> SidePts3D(double x0)
+    {
+        var p = new List<(double x, double y, double z)>();
+        void A(double y, double z) => p.Add((x0, y, z));
+        A(0, 0);
+        foreach (var ty in TabPositions(D))
+            { A(ty,0); A(ty,TF); A(ty+TabH,TF); A(ty+TabH,0); }
+        A(D, 0);
+        foreach (var tz in TabPositions(H))
+            { A(D,tz); A(D-TF,tz); A(D-TF,tz+TabH); A(D,tz+TabH); }
+        A(D, H);
+        foreach (var ty in TabPositions(D).Reverse())
+            { A(ty+TabH,H); A(ty+TabH,H-TF); A(ty,H-TF); A(ty,H); }
+        A(0, H);
+        return p;
+    }
+
+    List<(double x, double y, double z)> BackPts3D(double y0)
+    {
+        var p = new List<(double x, double y, double z)>();
+        void A(double x, double z) => p.Add((x, y0, z));
+        A(T, T);
+        foreach (var tx in TabPositions(Wi))
+            { double rx=T+tx; A(rx,T); A(rx,0); A(rx+TabH,0); A(rx+TabH,T); }
+        A(W-T, T);
+        foreach (var tz in TabPositions(Hi))
+            { double rz=T+tz; A(W-T,rz); A(W,rz); A(W,rz+TabH); A(W-T,rz+TabH); }
+        A(W-T, H-T);
+        foreach (var tx in TabPositions(Wi).Reverse())
+            { double rx=T+tx; A(rx+TabH,H-T); A(rx+TabH,H); A(rx,H); A(rx,H-T); }
+        A(T, H-T);
+        foreach (var tz in TabPositions(Hi).Reverse())
+            { double rz=T+tz; A(T,rz+TabH); A(0,rz+TabH); A(0,rz); A(T,rz); }
+        return p;
+    }
+
+    List<(double x, double y, double z)> ShelfPts3D(double z0)
+    {
+        var p = new List<(double x, double y, double z)>();
+        void A(double x, double y) => p.Add((x, y, z0));
+        A(T, 0); A(W - T, 0);
+        foreach (var ty in TabPositions(D))
+            { A(W-T,ty); A(W,ty); A(W,ty+TabH); A(W-T,ty+TabH); }
+        A(W-T, D-T);
+        foreach (var tx in TabPositions(Wi).Reverse())
+            { double rx=T+tx; A(rx+TabH,D-T); A(rx+TabH,D); A(rx,D); A(rx,D-T); }
+        A(T, D-T);
+        foreach (var ty in TabPositions(D).Reverse())
+            { A(T,ty+TabH); A(0,ty+TabH); A(0,ty); A(T,ty); }
+        return p;
+    }
+
+    List<List<(double x, double y, double z)>> SideHoles3D(double x0)
+    {
+        var h = new List<List<(double x, double y, double z)>>();
+        foreach (var sz in ShelfSlotYs())
+            foreach (var ty in TabPositions(D))
+                h.Add(new List<(double x, double y, double z)>
+                {
+                    (x0, ty,      sz),    (x0, ty+TabH, sz),
+                    (x0, ty+TabH, sz+TF), (x0, ty,      sz+TF)
+                });
+        return h;
+    }
+
+    // Равномерно распределяет NTab шипов/пазов по краю длиной L.
+    double[] TabPositions(double L)
+    {
+        double gap = (L - NTab * TabH) / (NTab + 1);
+        var pos = new double[NTab];
+        for (int i = 0; i < NTab; i++)
+            pos[i] = gap + i * (gap + TabH);
+        return pos;
+    }
+
+    // Y-координаты верхнего края пазов полок на боковой стенке (в координатах D×H).
+    double[] ShelfSlotYs()
+    {
+        if (NShelves == 0) return Array.Empty<double>();
+        double gap = (Hi - NShelves * TF) / (NShelves + 1);
+        var ys = new double[NShelves];
+        for (int i = 0; i < NShelves; i++)
+            ys[i] = T + gap + i * (gap + TF);
+        return ys;
+    }
+
+    // ── Построители path-строк (используются и для рендера, и для SVG-экспорта) ─
+    string PathSide()
+    {
+        double pw = D, ph = H;
+        var sb = new StringBuilder();
+        sb.Append("M0,0");
+        foreach (var x in TabPositions(D))
+            sb.Append($" L{x:F2},0 L{x:F2},{TF:F2} L{x+TabH:F2},{TF:F2} L{x+TabH:F2},0");
+        sb.Append($" L{pw:F2},0");
+        foreach (var y in TabPositions(H))
+            sb.Append($" L{pw:F2},{y:F2} L{pw-TF:F2},{y:F2} L{pw-TF:F2},{y+TabH:F2} L{pw:F2},{y+TabH:F2}");
+        sb.Append($" L{pw:F2},{ph:F2}");
+        foreach (var x in TabPositions(D).Reverse())
+            sb.Append($" L{x+TabH:F2},{ph:F2} L{x+TabH:F2},{ph-TF:F2} L{x:F2},{ph-TF:F2} L{x:F2},{ph:F2}");
+        sb.Append($" L0,{ph:F2} Z");
+        foreach (var sy in ShelfSlotYs())
+            foreach (var x in TabPositions(D))
+                sb.Append($" M{x:F2},{sy:F2} L{x+TabH:F2},{sy:F2} L{x+TabH:F2},{sy+TF:F2} L{x:F2},{sy+TF:F2} Z");
+        return sb.ToString();
+    }
+
+    string PathTopBottom()
+    {
+        double pw = W, ph = D;
+        var sb = new StringBuilder();
+        sb.Append($"M{T:F2},0 L{W-T:F2},0");
+        foreach (var y in TabPositions(D))
+            sb.Append($" L{W-T:F2},{y:F2} L{pw:F2},{y:F2} L{pw:F2},{y+TabH:F2} L{W-T:F2},{y+TabH:F2}");
+        sb.Append($" L{W-T:F2},{ph:F2}");
+        foreach (var x in TabPositions(Wi).Reverse())
+        {
+            double rx = T + x;
+            sb.Append($" L{rx+TabH:F2},{ph:F2} L{rx+TabH:F2},{ph-TF:F2} L{rx:F2},{ph-TF:F2} L{rx:F2},{ph:F2}");
+        }
+        sb.Append($" L{T:F2},{ph:F2}");
+        foreach (var y in TabPositions(D).Reverse())
+            sb.Append($" L{T:F2},{y+TabH:F2} L0,{y+TabH:F2} L0,{y:F2} L{T:F2},{y:F2}");
+        sb.Append($" L{T:F2},0 Z");
+        return sb.ToString();
+    }
+
+    string PathBack()
+    {
+        double pw = W, ph = H;
+        var sb = new StringBuilder();
+        sb.Append($"M{T:F2},{T:F2}");
+        foreach (var x in TabPositions(Wi))
+        {
+            double rx = T + x;
+            sb.Append($" L{rx:F2},{T:F2} L{rx:F2},0 L{rx+TabH:F2},0 L{rx+TabH:F2},{T:F2}");
+        }
+        sb.Append($" L{W-T:F2},{T:F2}");
+        foreach (var y in TabPositions(Hi))
+        {
+            double ry = T + y;
+            sb.Append($" L{W-T:F2},{ry:F2} L{pw:F2},{ry:F2} L{pw:F2},{ry+TabH:F2} L{W-T:F2},{ry+TabH:F2}");
+        }
+        sb.Append($" L{W-T:F2},{H-T:F2}");
+        foreach (var x in TabPositions(Wi).Reverse())
+        {
+            double rx = T + x;
+            sb.Append($" L{rx+TabH:F2},{H-T:F2} L{rx+TabH:F2},{ph:F2} L{rx:F2},{ph:F2} L{rx:F2},{H-T:F2}");
+        }
+        sb.Append($" L{T:F2},{H-T:F2}");
+        foreach (var y in TabPositions(Hi).Reverse())
+        {
+            double ry = T + y;
+            sb.Append($" L{T:F2},{ry+TabH:F2} L0,{ry+TabH:F2} L0,{ry:F2} L{T:F2},{ry:F2}");
+        }
+        sb.Append(" Z");
+        foreach (var sy in ShelfSlotYs())
+            foreach (var x in TabPositions(Wi))
+                sb.Append($" M{T+x:F2},{sy:F2} L{T+x+TabH:F2},{sy:F2} L{T+x+TabH:F2},{sy+TF:F2} L{T+x:F2},{sy+TF:F2} Z");
+        return sb.ToString();
+    }
+
+    string PathShelf()
+    {
+        double ph = D;   // bounding box depth = D (body 0..D-T + rear tabs D-T..D)
+        var sb = new StringBuilder();
+        sb.Append($"M{T:F2},0 L{W-T:F2},0");
+        foreach (var y in TabPositions(D))
+            sb.Append($" L{W-T:F2},{y:F2} L{W:F2},{y:F2} L{W:F2},{y+TabH:F2} L{W-T:F2},{y+TabH:F2}");
+        sb.Append($" L{W-T:F2},{D-T:F2}");
+        foreach (var x in TabPositions(Wi).Reverse())
+        {
+            double rx = T + x;
+            sb.Append($" L{rx+TabH:F2},{D-T:F2} L{rx+TabH:F2},{ph:F2} L{rx:F2},{ph:F2} L{rx:F2},{D-T:F2}");
+        }
+        sb.Append($" L{T:F2},{D-T:F2}");
+        foreach (var y in TabPositions(D).Reverse())
+            sb.Append($" L{T:F2},{y+TabH:F2} L0,{y+TabH:F2} L0,{y:F2} L{T:F2},{y:F2}");
+        sb.Append($" L{T:F2},0 Z");
+        return sb.ToString();
+    }
+
+    // ── Render* делегируют Path*() ─────────────────────────────────────────────
+    RenderFragment RenderSide()      => RenderPath(D,   H,     PathSide(),      "var(--accent)", $"Боковая стенка {D:F0}×{H:F0} мм · {NTab}×{TabH:F0} мм");
+    RenderFragment RenderTopBottom() => RenderPath(W,   D,     PathTopBottom(), "#27ae60",       $"Верх/низ {W:F0}×{D:F0} мм · {NTab}×{TabH:F0} мм");
+    RenderFragment RenderBack()      => RenderPath(W,   H,     PathBack(),      "#8e44ad",       $"Задняя стенка {W:F0}×{H:F0} мм · {NTab}×{TabH:F0} мм");
+    RenderFragment RenderShelf()     => RenderPath(W,   D,     PathShelf(),     "#e67e22",       $"Полка {W:F0}×{D:F0} мм · шипы бок {T:F0}×{TabH:F0} + зад {NTab}×{TabH:F0} мм");
+
+    // ── SVG-экспорт ────────────────────────────────────────────────────────────
+    static string WrapCutSvg(string pathData, double pw, double ph) =>
+        $"<?xml version=\"1.0\" encoding=\"utf-8\"?>\n" +
+        $"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{pw:F2}mm\" height=\"{ph:F2}mm\" viewBox=\"0 0 {pw:F2} {ph:F2}\">\n" +
+        $"  <path d=\"{pathData}\" fill=\"none\" stroke=\"#ff0000\" stroke-width=\"0.01\" stroke-linejoin=\"miter\"/>\n" +
+        $"</svg>";
+
+    // Возвращает (оригинальная ширина, высота, path) по метке детали
+    (double OW, double OH, string Path) PieceData(string label)
+    {
+        var side = L["box.side_short"];
+        var back = L["box.back_short"];
+        return label switch
+        {
+            _ when label.StartsWith(side)                                      => (D, H, PathSide()),
+            _ when label == L["box.top_short"] || label == L["box.bottom_short"] => (W, D, PathTopBottom()),
+            _ when label.StartsWith(back)                                      => (W, H, PathBack()),
+            _                                                                  => (W, D, PathShelf()),
+        };
+    }
+
+    string BuildSheetSvg(int sheetIdx)
+    {
+        var sheets = ComputeLayout();
+        if (sheetIdx >= sheets.Count) return "";
+        var sb = new StringBuilder();
+        sb.AppendLine("<?xml version=\"1.0\" encoding=\"utf-8\"?>");
+        sb.AppendLine($"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{SheetW:F1}mm\" height=\"{SheetH:F1}mm\" viewBox=\"0 0 {SheetW:F1} {SheetH:F1}\">");
+        foreach (var p in sheets[sheetIdx])
+        {
+            var (ow, oh, path) = PieceData(p.Label);
+            bool rotated = Math.Abs(p.W - oh) < 1 && Math.Abs(p.H - ow) < 1;
+            // при повороте 90° CW: translate(px, py+ow) rotate(90)
+            string tf = rotated
+                ? $"translate({p.X:F2},{p.Y + ow:F2}) rotate(90)"
+                : $"translate({p.X:F2},{p.Y:F2})";
+            sb.AppendLine($"  <g transform=\"{tf}\">");
+            sb.AppendLine($"    <path d=\"{path}\" fill=\"none\" stroke=\"#ff0000\" stroke-width=\"0.01\" stroke-linejoin=\"miter\"/>");
+            sb.AppendLine($"  </g>");
+        }
+        sb.Append("</svg>");
+        return sb.ToString();
+    }
+
+    async Task DlPiece(string name, string path, double pw, double ph) =>
+        await JS.InvokeVoidAsync("downloadInterop.saveSvg", name, WrapCutSvg(path, pw, ph));
+
+    async Task DlSheet(int idx) =>
+        await JS.InvokeVoidAsync("downloadInterop.saveSvg", $"лист_{idx + 1}.svg", BuildSheetSvg(idx));
+
+    // ── Общий рендер пути ────────────────────────────────────────────────────
+    RenderFragment RenderPath(double pw, double ph, string path, string color, string label)
+    {
+        double scale = Math.Min(460.0 / (pw + 20), 320.0 / (ph + 20));
+        double svgW  = pw * scale + 30;
+        double svgH  = ph * scale + 30;
+
+        return builder =>
+        {
+            int s = 0;
+            builder.OpenElement(s++, "svg");
+            builder.AddAttribute(s++, "width",   svgW.ToString("F0"));
+            builder.AddAttribute(s++, "height",  svgH.ToString("F0"));
+            builder.AddAttribute(s++, "viewBox", $"-15 -15 {svgW:F0} {svgH:F0}");
+            builder.AddAttribute(s++, "style",   "display:block;margin:auto;");
+
+            Bg(builder, ref s, -15, -15, svgW, svgH);
+
+            builder.OpenElement(s++, "g");
+            builder.AddAttribute(s++, "transform", $"scale({scale:F4})");
+            builder.OpenElement(s++, "path");
+            builder.AddAttribute(s++, "d",               path);
+            builder.AddAttribute(s++, "fill",            color);
+            builder.AddAttribute(s++, "fill-opacity",    "0.28");
+            builder.AddAttribute(s++, "fill-rule",       "evenodd");
+            builder.AddAttribute(s++, "stroke",          "var(--laser-cut)");
+            builder.AddAttribute(s++, "stroke-width",    $"{1.5/scale:F3}");
+            builder.AddAttribute(s++, "stroke-linejoin", "miter");
+            builder.CloseElement();
+            builder.CloseElement();
+
+            Label(builder, ref s, svgW / 2 - 15, svgH - 5, label);
+            builder.CloseElement();
+        };
+    }
+
+    // ── SVG-хелперы ──────────────────────────────────────────────────────────
+    static void Bg(RenderTreeBuilder b, ref int s, double x, double y, double w, double h)
+    {
+        b.OpenElement(s++, "rect");
+        b.AddAttribute(s++, "x", x.ToString("F0")); b.AddAttribute(s++, "y", y.ToString("F0"));
+        b.AddAttribute(s++, "width", w.ToString("F0")); b.AddAttribute(s++, "height", h.ToString("F0"));
+        b.AddAttribute(s++, "fill", "var(--laser-sheet-bg)");
+        b.CloseElement();
+    }
+
+    static void Label(RenderTreeBuilder b, ref int s, double x, double y, string text)
+    {
+        b.OpenElement(s++, "text");
+        b.AddAttribute(s++, "x", x.ToString("F1")); b.AddAttribute(s++, "y", y.ToString("F1"));
+        b.AddAttribute(s++, "text-anchor", "middle");
+        b.AddAttribute(s++, "font-size", "10");
+        b.AddAttribute(s++, "fill", "var(--muted)");
+        b.AddContent(s++, text);
+        b.CloseElement();
+    }
+}

@@ -1,0 +1,12 @@
+{
+  "name": "plywoodcutter",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build:ts": "tsc --project tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/three": "^0.183.1",
+    "typescript": "^5.9.3"
+  }
+}

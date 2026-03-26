@@ -1,0 +1,12 @@
+@page "/not-found"
+@layout MainLayout
+@inject L10n L
+@implements IDisposable
+
+<h3>@L["notfound.title"]</h3>
+<p>@L["notfound.text"]</p>
+
+@code {
+    protected override void OnInitialized() => L.OnChanged += StateHasChanged;
+    public void Dispose() => L.OnChanged -= StateHasChanged;
+}
