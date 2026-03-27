@@ -1,0 +1,66 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: "Release to deploy (e.g. v0.1.0). Leave empty to see available releases."
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: List available releases
+        if: inputs.release == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "::notice::Available releases:"
+          gh release list --limit 10
+          echo "::error::Please re-run and specify a release version."
+          exit 1
+
+      - name: Validate release exists
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view "${{ inputs.release }}" > /dev/null 2>&1; then
+            echo "::error::Release '${{ inputs.release }}' not found. Available:"
+            gh release list --limit 10
+            exit 1
+          fi
+          echo "tag=${{ inputs.release }}" >> $GITHUB_OUTPUT
+          echo "Deploying release ${{ inputs.release }}"
+
+  build:
+    needs: validate
+    uses: ./.github/workflows/build.yml
+    with:
+      ref: ${{ needs.validate.outputs.tag }}
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
